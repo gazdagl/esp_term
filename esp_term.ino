@@ -121,6 +121,8 @@ public:
           Serial.println("ERROR! EEPROM commit failed");
         }
       }
+      else
+        publish("broker/heatOn", "invalid", 0, 1);
     } else if (topic == "phone/heatOff") {
       send = 1;
       int heatOff_temp = atoi(data_str);
@@ -133,6 +135,8 @@ public:
           Serial.println("ERROR! EEPROM commit failed");
         }
       }
+      else
+        publish("broker/heatOff", "invalid", 0, 1);
     } else if (topic == "phone/interval") {
       send = 1;
       int interval_temp = atoi(data_str);
@@ -145,6 +149,8 @@ public:
           Serial.println("ERROR! EEPROM commit failed");
         }
       }
+      else
+        publish("broker/interval", "invalid", 0, 1);
     } else if (topic == "phone/reset") {
       heatOn = default_heatOn;
       heatOff = default_heatOff;
@@ -233,6 +239,7 @@ void setup() {
  * Subscribe to anything on the phone
  */
   myBroker.subscribe("phone/#");
+  //myBroker.publish("broker/status", "boot", 0, 1);
 
   EEPROM.begin(512);
   int heatOn_temp = EEPROM.read(heatOn_addr);
