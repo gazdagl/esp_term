@@ -1,12 +1,19 @@
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
+#include <WiFiUdp.h>
 #include "uMQTTBroker.h"
 #include "DHT.h"
 #include <string.h>
 #include <EEPROM.h>
+#include <ArduinoOTA.h>
 
 #define DHTTYPE DHT11
 #define DHTPIN 2    // D4
 #define RELAYPIN 0  // D2
+
+#define default_heatOn 14
+#define default_heatOff 16
+#define default_interval 60
 
 /*
  * Your WiFi config here
@@ -17,23 +24,28 @@ bool WiFiAP = false;         // Do yo want the ESP as AP?
 
 float humidity, temp_f, humidity_temp, temp_f_temp;  // Values read from sensor
 
-byte heatOn = 18;
-byte heatOff = 20;
-byte heatOn_min = 0;
+int send = 1;
+
+byte heatOn = default_heatOn;
+byte heatOff = default_heatOff;
+byte heatOn_min = 3;
 byte heatOn_max = 30;
-byte heatOff_min = 1;
+byte heatOff_min = 2;
 byte heatOff_max = 31;
 int hum_min = 20;
 int hum_max = 90;
-int temp_min = -10;
+int temp_min = 0;
 int temp_max = 50;
 String relayState = "OFF";
 
 unsigned long previousMillis = 0;  // will store last temp was read
-long interval = 5000;              // interval at which to read sensor
+byte interval = default_interval;  // interval at which to read sensor
+byte interval_min = 5;
+byte interval_max = 255;
 
 int heatOn_addr = 0;
 int heatOff_addr = 1;
+int interval_addr = 2;
 
 // Initialize DHT sensor
 
@@ -98,6 +110,7 @@ public:
     //printClients();
 
     if (topic == "phone/heatOn") {
+      send = 1;
       int heatOn_temp = atoi(data_str);
       if (heatOn_temp <= heatOn_max && heatOn_temp >= heatOn_min && heatOn_temp < heatOff && heatOn_temp != heatOn) {
         heatOn = heatOn_temp;
@@ -109,6 +122,7 @@ public:
         }
       }
     } else if (topic == "phone/heatOff") {
+      send = 1;
       int heatOff_temp = atoi(data_str);
       if (heatOff_temp <= heatOff_max && heatOff_temp >= heatOff_min && heatOff_temp > heatOn && heatOff_temp != heatOff) {
         heatOff = heatOff_temp;
@@ -119,6 +133,33 @@ public:
           Serial.println("ERROR! EEPROM commit failed");
         }
       }
+    } else if (topic == "phone/interval") {
+      send = 1;
+      int interval_temp = atoi(data_str);
+      if (interval_temp <= interval_max && interval_temp >= interval_min && interval_temp != interval) {
+        interval = interval_temp;
+        EEPROM.write(interval_addr, interval);
+        if (EEPROM.commit()) {
+          Serial.println("EEPROM successfully committed");
+        } else {
+          Serial.println("ERROR! EEPROM commit failed");
+        }
+      }
+    } else if (topic == "phone/reset") {
+      heatOn = default_heatOn;
+      heatOff = default_heatOff;
+      interval = default_interval;
+      EEPROM.write(heatOn_addr, heatOn);
+      EEPROM.write(heatOff_addr, heatOff);
+      EEPROM.write(interval_addr, interval);
+      if (EEPROM.commit()) {
+        Serial.println("EEPROM successfully committed");
+      } else {
+        Serial.println("ERROR! EEPROM commit failed");
+      }
+      Serial.println("Default values restored. Rebooting...");
+      delay(5000);
+      ESP.restart();
     }
   }
 
@@ -146,10 +187,17 @@ void startWiFiClient() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, pass);
 
-  while (WiFi.status() != WL_CONNECTED) {
+  /*while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+  }*/
+
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("Connection Failed! Rebooting...");
+    delay(5000);
+    ESP.restart();
   }
+
   Serial.println("");
 
   Serial.println("WiFi connected");
@@ -189,22 +237,63 @@ void setup() {
   EEPROM.begin(512);
   int heatOn_temp = EEPROM.read(heatOn_addr);
   int heatOff_temp = EEPROM.read(heatOff_addr);
+  int interval_temp = EEPROM.read(interval_addr);
   if (heatOn_temp >= heatOn_min && heatOn_temp <= heatOn_max) {
     heatOn = heatOn_temp;
   }
   if (heatOff_temp >= heatOff_min && heatOff_temp <= heatOff_max) {
     heatOff = heatOff_temp;
   }
+  if (interval_temp >= interval_min && interval_temp <= interval_max) {
+    interval = interval_temp;
+  }
+
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else {  // U_FS
+      type = "filesystem";
+    }
+
+    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+    Serial.println("Start updating " + type);
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+    }
+  });
+  ArduinoOTA.begin();
+  Serial.println("OTA Ready");
 }
 
 
 
 void loop() {
+  ArduinoOTA.handle();
+
   // check timer to see if it's time to update the data file with another DHT reading
   unsigned long currentMillis = millis();
 
   // cast to unsigned long to handle rollover
-  if ((unsigned long)(currentMillis - previousMillis) >= interval) {
+  if ((unsigned long)(currentMillis - previousMillis) >= (long)interval * 1000 || send) {
+    send = 0;
     // save the last time you read the sensor
     previousMillis = currentMillis;
 
@@ -222,6 +311,8 @@ void loop() {
     myBroker.publish("broker/heatOn", (String)heatOn, 0, 1);
     myBroker.publish("broker/heatOff", (String)heatOff, 0, 1);
     myBroker.publish("broker/relayState", relayState, 0, 1);
+    myBroker.publish("broker/wifiStrength", (String)WiFi.RSSI(), 0, 1);
+    myBroker.publish("broker/interval", (String)interval, 0, 1);
     myBroker.printClients();
 
     if (WiFi.status() != WL_CONNECTED) {
