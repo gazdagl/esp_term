@@ -22,7 +22,12 @@ char ssid[] = "Gazdag";      // your network SSID (name)
 char pass[] = "Domesz2018";  // your network password
 bool WiFiAP = false;         // Do yo want the ESP as AP?
 
-float humidity, temp_f, humidity_temp, temp_f_temp;  // Values read from sensor
+float humidity, temp_f, humidity_temp, temp_f_temp, temp_mav;  // Values read from sensor
+byte temp_shift = 3;
+int avgs = 5, avg_i;
+float avg_arr[5];  //avgs
+
+int firstreading = 1;
 
 int send = 1;
 
@@ -32,11 +37,16 @@ byte heatOn_min = 3;
 byte heatOn_max = 30;
 byte delta_min = 1;
 byte delta_max = 5;
+byte shift_min = 0;
+byte shift_max = 10;
 int hum_min = 20;
 int hum_max = 90;
 int temp_min = 0;
 int temp_max = 50;
 String relayState = "OFF";
+
+long RSSI;
+String WifiQuality;
 
 unsigned long previousMillis = 0;  // will store last temp was read
 byte interval = default_interval;  // interval at which to read sensor
@@ -46,6 +56,7 @@ byte interval_max = 255;
 int heatOn_addr = 0;
 int delta_addr = 1;
 int interval_addr = 2;
+int shift_addr = 4;
 
 // Initialize DHT sensor
 
@@ -59,8 +70,8 @@ void gettemperature() {
 
   // Reading temperature or humidity takes about 250 milliseconds!
   // Sensor readings may also be up to 2 seconds 'old' (it's a very slow sensor)
-  humidity_temp = dht.readHumidity();        // Read humidity (percent)
-  temp_f_temp = dht.readTemperature(false);  // Read temperature as Celsius
+  humidity_temp = dht.readHumidity();                     // Read humidity (percent)
+  temp_f_temp = dht.readTemperature(false) - temp_shift;  // Read temperature as Celsius
   // Check if any reads failed and exit
   if (isnan(humidity_temp) || isnan(temp_f_temp) || humidity_temp < hum_min || humidity_temp > hum_max || temp_f_temp < temp_min || temp_f_temp > temp_max) {
     Serial.println("Failed to read from DHT sensor!");
@@ -70,17 +81,36 @@ void gettemperature() {
   humidity = humidity_temp;
   temp_f = temp_f_temp;
 
+  if (firstreading) {
+    for (int i = 0; i < avgs; i++) {
+      avg_arr[i] = temp_f;
+    }
+    firstreading = 0;
+  } else {
+    avg_arr[avg_i] = temp_f;
+    avg_i++;
+    if (avg_i >= avgs) {
+      avg_i = 0;
+    }
+  }
+
+  temp_mav = 0;
+  //average
+  for (int i = 0; i < avgs; i++) {
+    temp_mav += avg_arr[i];
+  }
+  temp_mav /= avgs;
+
 
   // turn the relay switch Off or On depending on the temperature reading
-  if (temp_f <= heatOn) {
+  if (temp_mav <= heatOn) {
     digitalWrite(RELAYPIN, LOW);
     relayState = "ON";
-  } else if (temp_f >= heatOn+delta) {
+  } else if (temp_mav >= heatOn + delta) {
     digitalWrite(RELAYPIN, HIGH);
     relayState = "OFF";
   }
 }
-
 
 /*
  * Custom broker class with overwritten callback functions
@@ -120,8 +150,7 @@ public:
         } else {
           Serial.println("ERROR! EEPROM commit failed");
         }
-      }
-      else
+      } else
         publish("broker/heatOn", "invalid", 0, 1);
     } else if (topic == "phone/delta") {
       send = 1;
@@ -134,8 +163,7 @@ public:
         } else {
           Serial.println("ERROR! EEPROM commit failed");
         }
-      }
-      else
+      } else
         publish("broker/delta", "invalid", 0, 1);
     } else if (topic == "phone/interval") {
       send = 1;
@@ -148,9 +176,21 @@ public:
         } else {
           Serial.println("ERROR! EEPROM commit failed");
         }
-      }
-      else
+      } else
         publish("broker/interval", "invalid", 0, 1);
+    } else if (topic == "phone/shift") {
+      send = 1;
+      int shift_temp = atoi(data_str);
+      if (shift_temp <= shift_max && shift_temp >= shift_min && shift_temp != temp_shift) {
+        temp_shift = shift_temp;
+        EEPROM.write(shift_addr, temp_shift);
+        if (EEPROM.commit()) {
+          Serial.println("EEPROM successfully committed");
+        } else {
+          Serial.println("ERROR! EEPROM commit failed");
+        }
+      } else
+        publish("broker/shift", "invalid", 0, 1);
     } else if (topic == "phone/reset") {
       heatOn = default_heatOn;
       delta = default_delta;
@@ -192,6 +232,7 @@ void startWiFiClient() {
   Serial.println("Connecting to " + (String)ssid);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, pass);
+  WiFi.config(IPAddress(192, 168, 0, 61), IPAddress(192, 168, 0, 1), IPAddress(255, 255, 255, 0));
 
   /*while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -242,9 +283,10 @@ void setup() {
   //myBroker.publish("broker/status", "boot", 0, 1);
 
   EEPROM.begin(512);
-  int heatOn_temp = EEPROM.read(heatOn_addr);
-  int delta_temp = EEPROM.read(delta_addr);
-  int interval_temp = EEPROM.read(interval_addr);
+  byte heatOn_temp = EEPROM.read(heatOn_addr);
+  byte delta_temp = EEPROM.read(delta_addr);
+  byte interval_temp = EEPROM.read(interval_addr);
+  byte shift_temp = EEPROM.read(shift_addr);
   if (heatOn_temp >= heatOn_min && heatOn_temp <= heatOn_max) {
     heatOn = heatOn_temp;
   }
@@ -253,6 +295,9 @@ void setup() {
   }
   if (interval_temp >= interval_min && interval_temp <= interval_max) {
     interval = interval_temp;
+  }
+  if (shift_temp >= shift_min && shift_temp <= shift_max) {
+    temp_shift = shift_temp;
   }
 
   ArduinoOTA.onStart([]() {
@@ -313,13 +358,22 @@ void loop() {
     Serial.print("Number of clients: ");
     Serial.println(myBroker.getClientCount());
 
+    RSSI = WiFi.RSSI();
+    if (RSSI > -70) WifiQuality = "Excellent";
+    else if (RSSI < -70 && RSSI > -80) WifiQuality = "Good";
+    else if (RSSI < -80 && RSSI > -90) WifiQuality = "Fair";
+    else if (RSSI < -90) WifiQuality = "Weak";
+
     myBroker.publish("broker/temp", (String)(int)temp_f, 0, 1);
+    myBroker.publish("broker/temp_avg", (String)temp_mav, 0, 1);
     myBroker.publish("broker/humi", (String)(int)humidity, 0, 1);
     myBroker.publish("broker/heatOn", (String)heatOn, 0, 1);
     myBroker.publish("broker/delta", (String)delta, 0, 1);
     myBroker.publish("broker/relayState", relayState, 0, 1);
-    myBroker.publish("broker/wifiStrength", (String)WiFi.RSSI(), 0, 1);
+    myBroker.publish("broker/wifiStrength", (String)RSSI, 0, 1);
+    myBroker.publish("broker/wifiQuality", WifiQuality, 0, 1);
     myBroker.publish("broker/interval", (String)interval, 0, 1);
+    myBroker.publish("broker/shift", (String)temp_shift, 0, 1);
     myBroker.printClients();
 
     if (WiFi.status() != WL_CONNECTED) {
