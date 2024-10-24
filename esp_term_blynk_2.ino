@@ -2,7 +2,7 @@
 #define BLYNK_TEMPLATE_NAME "term"
 #define BLYNK_AUTH_TOKEN "1gE0QqCW4Pdfp3qXDowz1-oOAD_Rb22E"
 
-#define BLYNK_FIRMWARE_VERSION "0.2.2"
+#define BLYNK_FIRMWARE_VERSION "0.3.2"  //2. kalibracio
 
 #define BLYNK_PRINT Serial
 
@@ -28,8 +28,8 @@
 //________________________________________________________________
 String overTheAirURL = "";
 
-#define WIFI_SSID "Gazdag"      //Enter Wifi Name
-#define WIFI_PASS "Domesz2018"  //Enter wifi Password
+#define WIFI_SSID "Rozsa2"      //Enter Wifi Name
+#define WIFI_PASS "Potrete1"  //Enter wifi Password
 
 #define DHTTYPE DHT11
 #define DHTPIN 2    // D4
@@ -43,7 +43,7 @@ String overTheAirURL = "";
 boolean setBlynk = 0;
 
 float humidity, temp_f, humidity_temp, temp_f_temp, temp_mav;  // Values read from sensor
-byte temp_shift = 1;
+byte temp_shift = 5;
 int avgs = 20, avg_i;
 float avg_arr[20];  //avgs
 
